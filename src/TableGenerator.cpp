@@ -1,226 +1,261 @@
 #include "TableGenerator.h"
+
 #include <algorithm>
-#include <limits>
-#include <vector>
-#include <algorithm>
-#include <limits>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <numeric>
+#include <string>
 #include <utility>
 #include <vector>
 
-void TableGenerator::load(const std::vector<Rect> &rectangles)
-{
-    calculate(rectangles);
+namespace {
+std::uint64_t coordinateDistance(std::int64_t begin, std::int64_t end) {
+  return static_cast<std::uint64_t>(end) - static_cast<std::uint64_t>(begin);
 }
 
-void TableGenerator::calculate(const std::vector<Rect> &rectangles)
-{
-    columnWidths_.clear();
-    rowHeights_.clear();
-    calculatedRects_.clear();
+std::size_t coordinateIndex(const std::vector<std::int64_t> &coordinates,
+                            std::int64_t coordinate) {
+  const auto it =
+      std::lower_bound(coordinates.begin(), coordinates.end(), coordinate);
 
-    if (rectangles.empty())
-        return;
-
-    std::vector<int64_t> xs;
-    std::vector<int64_t> ys;
-
-    xs.reserve(rectangles.size() * 2);
-    ys.reserve(rectangles.size() * 2);
-    calculatedRects_.reserve(rectangles.size());
-
-    long double minArea = std::numeric_limits<long double>::max();
-    long double maxArea = 0.0;
-
-    for (const auto &rect : rectangles)
-    {
-        xs.push_back(rect.tl_.x_);
-        xs.push_back(rect.br_.x_);
-
-        ys.push_back(rect.tl_.y_);
-        ys.push_back(rect.br_.y_);
-
-        const long double width =
-            static_cast<long double>(rect.br_.x_) - rect.tl_.x_;
-
-        const long double height =
-            static_cast<long double>(rect.br_.y_) - rect.tl_.y_;
-
-        const long double area = width * height;
-
-        minArea = std::min(minArea, area);
-        maxArea = std::max(maxArea, area);
-    }
-
-    std::sort(xs.begin(), xs.end());
-    xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
-
-    std::sort(ys.begin(), ys.end());
-    ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
-
-    columnWidths_.reserve(xs.size() - 1);
-
-    for (std::size_t i = 0; i + 1 < xs.size(); ++i)
-        columnWidths_.push_back(xs[i + 1] - xs[i]);
-
-    rowHeights_.reserve(ys.size() - 1);
-
-    for (std::size_t i = 0; i + 1 < ys.size(); ++i)
-        rowHeights_.push_back(ys[i + 1] - ys[i]);
-
-    for (const auto &rect : rectangles)
-    {
-        const std::size_t left =
-            std::lower_bound(xs.begin(), xs.end(), rect.tl_.x_) - xs.begin();
-
-        const std::size_t right =
-            std::lower_bound(xs.begin(), xs.end(), rect.br_.x_) - xs.begin();
-
-        const std::size_t top =
-            std::lower_bound(ys.begin(), ys.end(), rect.tl_.y_) - ys.begin();
-
-        const std::size_t bottom =
-            std::lower_bound(ys.begin(), ys.end(), rect.br_.y_) - ys.begin();
-
-        const long double width =
-            static_cast<long double>(rect.br_.x_) - rect.tl_.x_;
-
-        const long double height =
-            static_cast<long double>(rect.br_.y_) - rect.tl_.y_;
-
-        const long double area = width * height;
-
-        double normalizedArea = 0.5;
-
-        if (minArea != maxArea)
-        {
-            normalizedArea = static_cast<double>(
-                (area - minArea) / (maxArea - minArea));
-        }
-
-        calculatedRects_.push_back({top,
-                                    left,
-                                    bottom - top,
-                                    right - left,
-                                    85.0 - 40.0 * normalizedArea});
-    }
-
-    std::sort(
-        calculatedRects_.begin(),
-        calculatedRects_.end(),
-        [](const CalculatedRect &lhs, const CalculatedRect &rhs)
-        {
-            if (lhs.row_ != rhs.row_)
-                return lhs.row_ < rhs.row_;
-
-            return lhs.column_ < rhs.column_;
-        });
+  return static_cast<std::size_t>(it - coordinates.begin());
 }
 
-std::string TableGenerator::generate() const
-{
-    HTMLEntity html;
+long double rectangleArea(const Rect &rect) {
+  const auto width = coordinateDistance(rect.topLeft.x, rect.bottomRight.x);
+  const auto height = coordinateDistance(rect.topLeft.y, rect.bottomRight.y);
 
-    HTMLTag head{"head"};
-    head.children_.push_back(
-        HTMLTag{"meta", {{"charset", "utf-8"}}});
+  return static_cast<long double>(width) * static_cast<long double>(height);
+}
+}
 
-    head.children_.push_back(
-        HTMLTag{
-            "style",
-            {},
-            "html,body{margin:0;padding:0;}"
-            "table{border-collapse:collapse;border-spacing:0;}"
-            "td{padding:0;}"});
+void TableGenerator::load(const std::vector<Rect> &rectangles) {
+  calculate(rectangles);
+}
 
-    HTMLTag body{"body"};
-    HTMLTag table{"table"};
+void TableGenerator::calculate(const std::vector<Rect> &rectangles) {
+  columnWidths_.clear();
+  rowHeights_.clear();
+  calculatedRects_.clear();
 
-    if (!columnWidths_.empty() && !rowHeights_.empty())
-    {
-        HTMLTag colgroup{"colgroup"};
+  if (rectangles.empty())
+    return;
 
-        for (const auto width : columnWidths_)
-        {
-            HTMLTag col{"col"};
-            col.attributes_["style"] =
-                "width:" + std::to_string(width) + "px";
+  const PreparedInput input = prepareInput(rectangles);
+  calculateAxisSizes(input);
+  calculateRectangles(rectangles, input);
 
-            colgroup.children_.push_back(std::move(col));
-        }
+  std::sort(calculatedRects_.begin(), calculatedRects_.end(),
+            [](const CalculatedRect &lhs, const CalculatedRect &rhs) {
+              if (lhs.row != rhs.row)
+                return lhs.row < rhs.row;
 
-        table.children_.push_back(std::move(colgroup));
+              return lhs.column < rhs.column;
+            });
+}
 
-        std::vector<std::size_t> occupiedUntilRow(
-            columnWidths_.size(), 0);
+PreparedInput
+TableGenerator::prepareInput(const std::vector<Rect> &rectangles) const {
+  PreparedInput input;
+  input.xs.reserve(rectangles.size() * 2);
+  input.ys.reserve(rectangles.size() * 2);
+  input.minArea = std::numeric_limits<long double>::max();
+  input.maxArea = 0.0L;
 
-        std::size_t nextRect = 0;
+  for (const auto &rect : rectangles) {
+    input.xs.push_back(rect.topLeft.x);
+    input.xs.push_back(rect.bottomRight.x);
+    input.ys.push_back(rect.topLeft.y);
+    input.ys.push_back(rect.bottomRight.y);
 
-        for (std::size_t row = 0; row < rowHeights_.size(); ++row)
-        {
-            HTMLTag tr{"tr"};
-            tr.attributes_["style"] =
-                "height:" + std::to_string(rowHeights_[row]) + "px";
+    const long double area = rectangleArea(rect);
+    input.minArea = std::min(input.minArea, area);
+    input.maxArea = std::max(input.maxArea, area);
+  }
 
-            std::size_t column = 0;
+  std::sort(input.xs.begin(), input.xs.end());
+  input.xs.erase(std::unique(input.xs.begin(), input.xs.end()), input.xs.end());
 
-            while (column < columnWidths_.size())
-            {
-                if (occupiedUntilRow[column] > row)
-                {
-                    ++column;
-                    continue;
-                }
+  std::sort(input.ys.begin(), input.ys.end());
+  input.ys.erase(std::unique(input.ys.begin(), input.ys.end()), input.ys.end());
 
-                if (nextRect < calculatedRects_.size() &&
-                    calculatedRects_[nextRect].row_ == row &&
-                    calculatedRects_[nextRect].column_ == column)
-                {
-                    const auto &rect = calculatedRects_[nextRect];
+  return input;
+}
 
-                    HTMLTag td{"td"};
+void TableGenerator::calculateAxisSizes(const PreparedInput &input) {
+  columnWidths_.reserve(input.xs.size() - 1);
+  for (std::size_t i = 0; i + 1 < input.xs.size(); ++i)
+    columnWidths_.push_back(coordinateDistance(input.xs[i], input.xs[i + 1]));
 
-                    if (rect.rowspan_ > 1)
-                        td.attributes_["rowspan"] =
-                            std::to_string(rect.rowspan_);
+  rowHeights_.reserve(input.ys.size() - 1);
+  for (std::size_t i = 0; i + 1 < input.ys.size(); ++i)
+    rowHeights_.push_back(coordinateDistance(input.ys[i], input.ys[i + 1]));
+}
 
-                    if (rect.colspan_ > 1)
-                        td.attributes_["colspan"] =
-                            std::to_string(rect.colspan_);
+void TableGenerator::calculateRectangles(const std::vector<Rect> &rectangles,
+                                         const PreparedInput &input) {
+  calculatedRects_.reserve(rectangles.size());
 
-                    const auto lightness =
-                        static_cast<int>(std::lround(rect.lightness_));
+  for (const auto &rect : rectangles) {
+    const std::size_t left = coordinateIndex(input.xs, rect.topLeft.x);
+    const std::size_t right = coordinateIndex(input.xs, rect.bottomRight.x);
+    const std::size_t top = coordinateIndex(input.ys, rect.topLeft.y);
+    const std::size_t bottom = coordinateIndex(input.ys, rect.bottomRight.y);
 
-                    td.attributes_["style"] =
-                        "background-color:hsl(210,70%," +
-                        std::to_string(lightness) + "%)";
+    const long double area = rectangleArea(rect);
 
-                    for (std::size_t i = column;
-                         i < column + rect.colspan_;
-                         ++i)
-                    {
-                        occupiedUntilRow[i] = row + rect.rowspan_;
-                    }
-
-                    tr.children_.push_back(std::move(td));
-
-                    column += rect.colspan_;
-                    ++nextRect;
-                    continue;
-                }
-
-                tr.children_.push_back(HTMLTag{"td"});
-                ++column;
-            }
-
-            table.children_.push_back(std::move(tr));
-        }
+    long double normalizedArea = 0.5L;
+    if (input.minArea != input.maxArea) {
+      normalizedArea = (area - input.minArea) / (input.maxArea - input.minArea);
     }
 
-    body.children_.push_back(std::move(table));
+    const int lightness =
+        static_cast<int>(std::lround(85.0L - 40.0L * normalizedArea));
 
-    html.root().children_.push_back(std::move(head));
-    html.root().children_.push_back(std::move(body));
+    calculatedRects_.push_back(
+        {top, left, bottom - top, right - left, lightness});
+  }
+}
 
-    return html.toString();
+void TableGenerator::write(std::ostream &stream) const {
+  HTMLEntity html;
+  html.root().attributes_["lang"] = "en";
+
+  HTMLTag body{"body"};
+  body.children_.push_back(makeTable());
+
+  html.root().children_.push_back(makeHead());
+  html.root().children_.push_back(std::move(body));
+
+  html.write(stream);
+}
+
+HTMLTag TableGenerator::makeHead() const {
+  HTMLTag head{"head"};
+  head.children_.push_back(HTMLTag{"meta", {{"charset", "utf-8"}}});
+  head.children_.push_back(
+      HTMLTag{"meta",
+              {{"content", "width=device-width,initial-scale=1"},
+               {"name", "viewport"}}});
+  head.children_.push_back(HTMLTag{"title", {}, "Rectangle Table"});
+  head.children_.push_back(
+      HTMLTag{"style",
+              {},
+              "html,body{margin:0;}"
+              "body{padding:1px;}"
+              "table{border-collapse:collapse;border-spacing:0;"
+              "table-layout:fixed;}"
+              "td{padding:0;}"
+              ".rect{box-shadow:inset 0 0 0 1px rgba(0,0,0,.35);}"});
+
+  return head;
+}
+
+HTMLTag TableGenerator::makeTable() const {
+  HTMLTag table{"table", {{"role", "presentation"}}};
+
+  if (columnWidths_.empty() || rowHeights_.empty())
+    return table;
+
+  const std::uint64_t tableWidth = std::accumulate(
+      columnWidths_.begin(), columnWidths_.end(), std::uint64_t{0});
+
+  table.attributes_["style"] = "width:" + std::to_string(tableWidth) + "px";
+
+  table.children_.push_back(makeColumnGroup());
+  appendRows(table);
+
+  return table;
+}
+
+HTMLTag TableGenerator::makeColumnGroup() const {
+  HTMLTag colgroup{"colgroup"};
+
+  for (const auto width : columnWidths_) {
+    HTMLTag col{"col"};
+    col.attributes_["style"] = "width:" + std::to_string(width) + "px";
+    colgroup.children_.push_back(std::move(col));
+  }
+
+  return colgroup;
+}
+
+void TableGenerator::appendRows(HTMLTag &table) const {
+  ActiveRects activeRects;
+  std::size_t nextRect = 0;
+
+  for (std::size_t row = 0; row < rowHeights_.size(); ++row) {
+    updateActiveRects(row, activeRects, nextRect);
+    table.children_.push_back(makeRow(row, activeRects));
+  }
+}
+
+void TableGenerator::updateActiveRects(std::size_t row,
+                                       ActiveRects &activeRects,
+                                       std::size_t &nextRect) const {
+  for (auto it = activeRects.begin(); it != activeRects.end();) {
+    if (it->second.bottom <= row)
+      it = activeRects.erase(it);
+    else
+      ++it;
+  }
+
+  while (nextRect < calculatedRects_.size() &&
+         calculatedRects_[nextRect].row == row) {
+    const auto &rect = calculatedRects_[nextRect];
+
+    activeRects.emplace(
+        rect.column,
+        ActiveRect{&rect, rect.column + rect.colspan, rect.row + rect.rowspan});
+
+    ++nextRect;
+  }
+}
+
+HTMLTag TableGenerator::makeRow(std::size_t row,
+                                const ActiveRects &activeRects) const {
+  HTMLTag tr{"tr"};
+  tr.attributes_["style"] = "height:" + std::to_string(rowHeights_[row]) + "px";
+
+  std::size_t column = 0;
+
+  for (const auto &[left, active] : activeRects) {
+    if (column < left)
+      tr.children_.push_back(makeEmptyCell(left - column));
+
+    if (active.rect->row == row)
+      tr.children_.push_back(makeRectangleCell(*active.rect));
+
+    column = active.right;
+  }
+
+  if (column < columnWidths_.size())
+    tr.children_.push_back(makeEmptyCell(columnWidths_.size() - column));
+
+  return tr;
+}
+
+HTMLTag TableGenerator::makeRectangleCell(const CalculatedRect &rect) const {
+  HTMLTag td{"td", {{"class", "rect"}}};
+
+  if (rect.rowspan > 1)
+    td.attributes_["rowspan"] = std::to_string(rect.rowspan);
+
+  if (rect.colspan > 1)
+    td.attributes_["colspan"] = std::to_string(rect.colspan);
+
+  td.attributes_["style"] =
+      "background-color:hsl(210,70%," + std::to_string(rect.lightness) + "%)";
+
+  return td;
+}
+
+HTMLTag TableGenerator::makeEmptyCell(std::size_t colspan) const {
+  HTMLTag td{"td"};
+
+  if (colspan > 1)
+    td.attributes_["colspan"] = std::to_string(colspan);
+
+  return td;
 }

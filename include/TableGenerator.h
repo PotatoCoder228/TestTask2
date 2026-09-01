@@ -1,49 +1,66 @@
 #pragma once
 
-#include <ostream>
-#include <string>
-#include <HTMLEntity.h>
-#include <cstddef>
-#include <string>
-#include <vector>
-#include <utility>
-
 #include "HTMLEntity.h"
 #include "Rect.h"
 
-struct CalculatedRect
-{
-    std::size_t row_;
-    std::size_t column_;
-    std::size_t rowspan_;
-    std::size_t colspan_;
-    double lightness_;
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <ostream>
+#include <vector>
+
+struct CalculatedRect {
+  std::size_t row;
+  std::size_t column;
+  std::size_t rowspan;
+  std::size_t colspan;
+  int lightness;
 };
 
-class HTMLGenerator
-{
-public:
-    virtual ~HTMLGenerator() = default;
-
-    virtual std::string generate() const = 0;
-
-    bool write(std::ostream &stream) const
-    {
-        stream << generate();
-        return stream.good();
-    }
+struct PreparedInput {
+  std::vector<std::int64_t> xs;
+  std::vector<std::int64_t> ys;
+  long double minArea;
+  long double maxArea;
 };
 
-class TableGenerator : public HTMLGenerator
-{
+struct ActiveRect {
+  const CalculatedRect *rect;
+  std::size_t right;
+  std::size_t bottom;
+};
+
+class HTMLGenerator {
 public:
-    void load(const std::vector<Rect> &rectangles);
-    std::string generate() const override;
+  virtual ~HTMLGenerator() = default;
+  virtual void write(std::ostream &stream) const = 0;
+};
+
+class TableGenerator : public HTMLGenerator {
+public:
+  void load(const std::vector<Rect> &rectangles);
+  void write(std::ostream &stream) const override;
 
 private:
-    void calculate(const std::vector<Rect> &rectangles);
+  using ActiveRects = std::map<std::size_t, ActiveRect>;
 
-    std::vector<int64_t> columnWidths_;
-    std::vector<int64_t> rowHeights_;
-    std::vector<CalculatedRect> calculatedRects_;
+  void calculate(const std::vector<Rect> &rectangles);
+  PreparedInput prepareInput(const std::vector<Rect> &rectangles) const;
+  void calculateAxisSizes(const PreparedInput &input);
+  void calculateRectangles(const std::vector<Rect> &rectangles,
+                           const PreparedInput &input);
+
+  HTMLTag makeHead() const;
+  HTMLTag makeTable() const;
+  HTMLTag makeColumnGroup() const;
+  void appendRows(HTMLTag &table) const;
+  void updateActiveRects(std::size_t row, ActiveRects &activeRects,
+                         std::size_t &nextRect) const;
+  HTMLTag makeRow(std::size_t row, const ActiveRects &activeRects) const;
+  HTMLTag makeRectangleCell(const CalculatedRect &rect) const;
+  HTMLTag makeEmptyCell(std::size_t colspan) const;
+
+  std::vector<std::uint64_t> columnWidths_;
+  std::vector<std::uint64_t> rowHeights_;
+  std::vector<CalculatedRect> calculatedRects_;
 };

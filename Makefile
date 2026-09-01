@@ -1,7 +1,7 @@
 CXX := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -O3 -march=native -mtune=native -Iinclude
 
-TARGET := rectangles
+TARGET := generator
 
 SRC := \
 	src/main.cpp \
